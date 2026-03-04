@@ -17,74 +17,71 @@ jobs:
           sudo apt update
           sudo apt install -y \
             python3 python3-pip python3-setuptools python3-wheel \
-            git zip unzip \
+            git zip unzip wget \
             openjdk-17-jdk \
             build-essential autoconf libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             libffi-dev libssl-dev \
             cmake \
-            libsqlite3-dev liblzma-dev \
-            wget
+            libsqlite3-dev liblzma-dev
 
       - name: Install Python build tools
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install --upgrade buildozer cython
 
-      - name: Install Android cmdline-tools + accept licenses + install build-tools
+      - name: Prepare Buildozer SDK + install cmdline-tools + accept licenses
         shell: bash
         run: |
           set -euxo pipefail
 
-          export ANDROID_SDK_ROOT="$HOME/android-sdk"
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          # 1) Fuerza a buildozer a crear la carpeta del SDK en ~/.buildozer (aunque falle luego)
+          buildozer android update || true
 
-          # Descarga cmdline-tools oficial (Linux)
+          SDKROOT="$HOME/.buildozer/android/platform/android-sdk"
+          echo "SDKROOT=$SDKROOT"
+          mkdir -p "$SDKROOT/cmdline-tools"
+
+          # 2) Instala cmdline-tools en la ubicación esperada por el sdkmanager moderno
           cd /tmp
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
+          rm -rf "$SDKROOT/cmdline-tools/latest"
+          mkdir -p "$SDKROOT/cmdline-tools/latest"
+          unzip -q cmdline.zip -d "$SDKROOT/cmdline-tools/latest"
 
-          # Extrae en la ruta correcta: cmdline-tools/latest
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          unzip -q cmdline.zip -d "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-
-          # OJO: el zip trae una carpeta "cmdline-tools" dentro
-          # Movemos su contenido al nivel esperado
-          if [ -d "$ANDROID_SDK_ROOT/cmdline-tools/latest/cmdline-tools" ]; then
-            mv "$ANDROID_SDK_ROOT/cmdline-tools/latest/cmdline-tools/"* "$ANDROID_SDK_ROOT/cmdline-tools/latest/"
-            rmdir "$ANDROID_SDK_ROOT/cmdline-tools/latest/cmdline-tools"
+          # El zip contiene una carpeta 'cmdline-tools' dentro, hay que subir su contenido un nivel
+          if [ -d "$SDKROOT/cmdline-tools/latest/cmdline-tools" ]; then
+            mv "$SDKROOT/cmdline-tools/latest/cmdline-tools/"* "$SDKROOT/cmdline-tools/latest/"
+            rmdir "$SDKROOT/cmdline-tools/latest/cmdline-tools"
           fi
 
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
+          export PATH="$SDKROOT/cmdline-tools/latest/bin:$SDKROOT/platform-tools:$PATH"
 
-          # Acepta licencias
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses
+          # 3) Acepta licencias sin interacción
+          yes | sdkmanager --sdk_root="$SDKROOT" --licenses
 
-          # Instala lo necesario (platform-tools, platform api 33, build-tools 34)
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
+          # 4) Instala explícitamente build-tools estables (incluye aidl) + platform-tools + platform 33
+          yes | sdkmanager --sdk_root="$SDKROOT" \
             "platform-tools" \
             "platforms;android-33" \
             "build-tools;34.0.0"
 
-          # Verifica aidl
-          test -x "$ANDROID_SDK_ROOT/build-tools/34.0.0/aidl"
-          "$ANDROID_SDK_ROOT/build-tools/34.0.0/aidl" --version || true
+          # 5) Verifica que existe aidl
+          test -x "$SDKROOT/build-tools/34.0.0/aidl"
+          "$SDKROOT/build-tools/34.0.0/aidl" --version || true
 
-      - name: Build APK (Buildozer) using our SDK
+      - name: Build APK (Buildozer)
         shell: bash
         run: |
           set -euxo pipefail
-          export ANDROID_SDK_ROOT="$HOME/android-sdk"
+          export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
           export ANDROID_HOME="$ANDROID_SDK_ROOT"
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
 
-          # Buildozer usará este SDK en lugar del suyo
           buildozer -v android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
-        with:
-          name: android-apk
-          path: bin/*.apk
         with:
           name: android-apk
           path: bin/*.apk
