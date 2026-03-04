@@ -1,3 +1,27 @@
+import sys
+import traceback
+
+def _install_crash_logger():
+    def excepthook(exc_type, exc, tb):
+        try:
+            txt = "".join(traceback.format_exception(exc_type, exc, tb))
+            # Intenta guardar donde Kivy suele tener acceso
+            try:
+                from android.storage import app_storage_path  # disponible en Android
+                p = app_storage_path()
+                path = p + "/crash.log"
+            except Exception:
+                path = "crash.log"
+
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(txt)
+        except Exception:
+            pass
+
+    sys.excepthook = excepthook
+
+_install_crash_logger()
+
 import re
 import json
 import zipfile
