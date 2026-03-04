@@ -54,19 +54,27 @@ jobs:
             mv "$SDKROOT/cmdline-tools/latest/cmdline-tools/"* "$SDKROOT/cmdline-tools/latest/"
             rmdir "$SDKROOT/cmdline-tools/latest/cmdline-tools"
           fi
+          SDKMANAGER="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
+
+          echo "SDKROOT=$SDKROOT"
+          ls -la "$SDKROOT/cmdline-tools" || true
+          ls -la "$SDKROOT/cmdline-tools/latest" || true
           ls -la "$SDKROOT/cmdline-tools/latest/bin" || true
-          which sdkmanager
-          sdkmanager --version
+
+          # Fallo explícito si no existe
+          test -f "$SDKMANAGER"
+          chmod +x "$SDKMANAGER" || true
+          "$SDKMANAGER" --version
 
           export PATH="$SDKROOT/cmdline-tools/latest/bin:$SDKROOT/platform-tools:$PATH"
 
           # Aceptar licencias sin que "yes" rompa el build con pipefail
           set +o pipefail
-          yes | sdkmanager --sdk_root="$SDKROOT" --licenses
+          yes | "$SDKMANAGER" --sdk_root="$SDKROOT" --licenses
           set -o pipefail
 
           # Instalar paquetes y quedarnos con el retorno real de sdkmanager
-          sdkmanager --sdk_root="$SDKROOT" \
+          "$SDKMANAGER" --sdk_root="$SDKROOT" \
           "platform-tools" \
           "platforms;android-33" \
           "build-tools;34.0.0"
