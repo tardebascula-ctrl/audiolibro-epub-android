@@ -2,28 +2,58 @@ name: Build Android APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y python3-pip git zip unzip openjdk-17-jdk
-        pip install buildozer cython
+      - name: Install system dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            python3 python3-pip python3-setuptools python3-wheel \
+            git zip unzip \
+            openjdk-17-jdk \
+            build-essential autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev \
+            libffi-dev libssl-dev \
+            cmake \
+            libsqlite3-dev liblzma-dev
 
-    - name: Build APK
-      run: |
-        buildozer init || true
-        buildozer android debug
+      - name: Install Python build tools
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install --upgrade buildozer cython
 
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-apk
-        path: bin/*.apk
+      - name: Pre-download Android SDK & accept licenses
+        run: |
+          # Fuerza a buildozer a preparar el SDK/NDK/SDKmanager
+          buildozer android update || true
+
+          SDKM="$HOME/.buildozer/android/platform/android-sdk/cmdline-tools/latest/bin/sdkmanager"
+
+          # A veces buildozer deja cmdline-tools en otra ruta
+          if [ ! -f "$SDKM" ]; then
+            SDKM="$(find $HOME/.buildozer/android/platform/android-sdk -path '*cmdline-tools*bin/sdkmanager' | head -n 1)"
+          fi
+
+          echo "Using sdkmanager at: $SDKM"
+          yes | "$SDKM" --licenses
+
+          # Instala explícitamente build-tools estables (y platform-tools)
+          yes | "$SDKM" "platform-tools" "build-tools;34.0.0"
+
+      - name: Build APK (Buildozer)
+        run: |
+          buildozer -v android debug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: bin/*.apk
