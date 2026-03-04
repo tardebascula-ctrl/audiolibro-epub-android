@@ -35,21 +35,21 @@ jobs:
         run: |
           set -euxo pipefail
 
-          # 1) Fuerza a buildozer a crear la carpeta del SDK en ~/.buildozer (aunque falle luego)
+          # Fuerza a buildozer a crear la carpeta del SDK en ~/.buildozer
           buildozer android update || true
 
           SDKROOT="$HOME/.buildozer/android/platform/android-sdk"
           echo "SDKROOT=$SDKROOT"
           mkdir -p "$SDKROOT/cmdline-tools"
 
-          # 2) Instala cmdline-tools en la ubicación esperada por el sdkmanager moderno
+          # Instala cmdline-tools (sdkmanager) en cmdline-tools/latest
           cd /tmp
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline.zip
           rm -rf "$SDKROOT/cmdline-tools/latest"
           mkdir -p "$SDKROOT/cmdline-tools/latest"
           unzip -q cmdline.zip -d "$SDKROOT/cmdline-tools/latest"
 
-          # El zip contiene una carpeta 'cmdline-tools' dentro, hay que subir su contenido un nivel
+          # El zip trae una carpeta "cmdline-tools" dentro; subimos su contenido
           if [ -d "$SDKROOT/cmdline-tools/latest/cmdline-tools" ]; then
             mv "$SDKROOT/cmdline-tools/latest/cmdline-tools/"* "$SDKROOT/cmdline-tools/latest/"
             rmdir "$SDKROOT/cmdline-tools/latest/cmdline-tools"
@@ -57,16 +57,16 @@ jobs:
 
           export PATH="$SDKROOT/cmdline-tools/latest/bin:$SDKROOT/platform-tools:$PATH"
 
-          # 3) Acepta licencias sin interacción
+          # Acepta licencias sin interacción
           yes | sdkmanager --sdk_root="$SDKROOT" --licenses
 
-          # 4) Instala explícitamente build-tools estables (incluye aidl) + platform-tools + platform 33
+          # Instala build-tools estables + platform-tools + platform 33
           yes | sdkmanager --sdk_root="$SDKROOT" \
             "platform-tools" \
             "platforms;android-33" \
             "build-tools;34.0.0"
 
-          # 5) Verifica que existe aidl
+          # Verifica aidl
           test -x "$SDKROOT/build-tools/34.0.0/aidl"
           "$SDKROOT/build-tools/34.0.0/aidl" --version || true
 
