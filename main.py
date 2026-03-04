@@ -398,12 +398,16 @@ class AndroidTTS:
         if not self.tts or not self.ready:
             return []
         try:
-            voices = self.tts.getVoices().toArray()
+            vs = self.tts.getVoices()
+            if vs is None:
+                return []
+            it = vs.iterator()
             out = []
-            for v in voices:
+            while it.hasNext():
+                v = it.next()
                 loc = v.getLocale()
-                lang = str(loc.getLanguage())
-                country = str(loc.getCountry())
+                lang = str(loc.getLanguage()) if loc else ""
+                country = str(loc.getCountry()) if loc else ""
                 name = str(v.getName())
                 out.append({"name": name, "lang": lang, "country": country})
             return out
@@ -414,8 +418,12 @@ class AndroidTTS:
         if not self.tts or not self.ready:
             return False
         try:
-            voices = self.tts.getVoices().toArray()
-            for v in voices:
+            vs = self.tts.getVoices()
+            if vs is None:
+                return False
+            it = vs.iterator()
+            while it.hasNext():
+                v = it.next()
                 if str(v.getName()) == voice_name:
                     self.tts.setVoice(v)
                     return True
