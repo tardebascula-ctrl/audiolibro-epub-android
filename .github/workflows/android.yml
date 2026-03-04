@@ -60,6 +60,7 @@ jobs:
           # Aceptar licencias sin que "yes" rompa el build con pipefail
           set +o pipefail
           yes | sdkmanager --sdk_root="$SDKROOT" --licenses
+          set -o pipefail
           # rc=${PIPESTATUS[1]}; if [ $rc -ne 0 ]; then exit $rc; fi
 
           # Instalar paquetes y quedarnos con el retorno real de sdkmanager
@@ -67,9 +68,8 @@ jobs:
           "platform-tools" \
           "platforms;android-33" \
           "build-tools;34.0.0"
-          set -o pipefail
+         
           # rc=${PIPESTATUS[1]}; if [ $rc -ne 0 ]; then exit $rc; fi
-
           # Verifica aidl
           test -x "$SDKROOT/build-tools/34.0.0/aidl"
           "$SDKROOT/build-tools/34.0.0/aidl" --version || true
