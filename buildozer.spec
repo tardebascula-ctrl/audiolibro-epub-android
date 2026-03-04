@@ -7,7 +7,7 @@ source.include_exts = py,kv,png,jpg,ttf,txt
 
 version = 0.1
 
-requirements = python3,kivy,plyer,pyjnius,ebooklib,beautifulsoup4,lxml
+requirements = python3,kivy,plyer,pyjnius
 
 orientation = portrait
 
