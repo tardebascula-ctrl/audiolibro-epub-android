@@ -12,33 +12,39 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
-          python-version: "3.11"
+          distribution: temurin
+          java-version: '17'
 
       - name: Install system dependencies
         run: |
           sudo apt update
           sudo apt install -y \
+            python3 python3-pip python3-setuptools python3-wheel \
             git zip unzip wget \
-            openjdk-17-jdk \
-            build-essential autoconf automake libtool m4 gettext pkg-config \
+            build-essential autoconf libtool pkg-config \
             zlib1g-dev libncurses5-dev libncursesw5-dev \
             libffi-dev libssl-dev \
             cmake \
+            automake libtool m4 gettext \
             libsqlite3-dev liblzma-dev
+
+      - name: Verify Java
+        run: |
+          java -version
+          echo "JAVA_HOME=$JAVA_HOME"
 
       - name: Install Python build tools (pinned)
         run: |
-          python -m pip install --upgrade pip
-          # Cython 0.29.x suele ser el “menos problemático” con p4a en muchos builds
-          python -m pip install "cython==0.29.36" "buildozer==1.5.0"
+          python3 -m pip install --upgrade pip
+          python3 -m pip install "buildozer==1.5.0" "cython<3"
 
-      - name: Prepare Buildozer SDK + install cmdline-tools + accept licenses
+      - name: Prepare Buildozer SDK + cmdline-tools + accept licenses
         shell: bash
         run: |
-          set -euxo pipefail
+          set -eux
 
           buildozer android update || true
 
@@ -58,35 +64,25 @@ jobs:
 
           SDKMANAGER="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
           test -f "$SDKMANAGER"
-          chmod +x "$SDKMANAGER" || true
-          
-          # ✅ Forzar Java 17 para sdkmanager
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH="$JAVA_HOME/bin:$PATH"
-          java -version
+          chmod +x "$SDKMANAGER"
 
-          set +o pipefail
-          yes | "$SDKMANAGER" --sdk_root="$SDKROOT" --licenses
-          set -o pipefail
+          export PATH="$SDKROOT/cmdline-tools/latest/bin:$SDKROOT/platform-tools:$PATH"
+
+          # asegura Java 17
+          java -version
+          "$SDKMANAGER" --version
+
+          yes | "$SDKMANAGER" --sdk_root="$SDKROOT" --licenses >/dev/null
 
           "$SDKMANAGER" --sdk_root="$SDKROOT" \
             "platform-tools" \
             "platforms;android-33" \
             "build-tools;34.0.0"
 
-          test -x "$SDKROOT/build-tools/34.0.0/aidl"
-          "$SDKROOT/build-tools/34.0.0/aidl" --lang=java --version || true
-
       - name: Build APK (Buildozer)
         shell: bash
         run: |
-          set -euxo pipefail
-
-          # ✅ Forzar Java 17 para Gradle/SDK tools usadas por p4a
-          export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-          export PATH="$JAVA_HOME/bin:$PATH"
-          java -version
-
+          set -eux
           export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
           export ANDROID_HOME="$ANDROID_SDK_ROOT"
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
