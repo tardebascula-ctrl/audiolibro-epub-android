@@ -1,13 +1,9 @@
-# main.py (versión corregida: NO inicializa TTS al arrancar para evitar SIGSEGV en jnius/TTS)
-
 import sys
 import traceback
 
 def _install_crash_logger():
     def excepthook(exc_type, exc, tb):
         txt = "".join(traceback.format_exception(exc_type, exc, tb))
-
-        # 1) Intenta escribir en app_storage (lo más fiable)
         try:
             from android.storage import app_storage_path
             base = app_storage_path()
@@ -16,8 +12,6 @@ def _install_crash_logger():
                 f.write(txt)
         except Exception:
             pass
-
-        # 2) También a logcat (para verlo con adb logcat)
         try:
             import android
             android.logger.error(txt)
@@ -33,6 +27,9 @@ import zipfile
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from pathlib import Path
+import os
+import shutil
+import time
 
 from kivy.app import App
 from kivy.lang import Builder
@@ -40,12 +37,13 @@ from kivy.clock import Clock
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.properties import StringProperty, ListProperty, NumericProperty, BooleanProperty
 
-from plyer import filechooser
+# plyer puede fallar en algunas ROMs; lo usamos pero con fallback
+try:
+    from plyer import filechooser
+except Exception:
+    filechooser = None
 
 
-# ---------------------------
-# UI
-# ---------------------------
 KV = r"""
 #:import dp kivy.metrics.dp
 
@@ -231,8 +229,7 @@ def html_to_text(html: str) -> str:
     s = _HTMLStripper()
     s.feed(html)
     text = s.get_text()
-    text = " ".join(text.split())
-    return text
+    return " ".join(text.split())
 
 
 def _find_opf_path(z: zipfile.ZipFile) -> str:
@@ -254,8 +251,7 @@ def epub_to_chapters(epub_path: str):
         opf_path = _find_opf_path(z)
         opf_dir = opf_path.rsplit("/", 1)[0] if "/" in opf_path else ""
 
-        opf_xml = z.read(opf_path)
-        opf_root = ET.fromstring(opf_xml)
+        opf_root = ET.fromstring(z.read(opf_path))
 
         ns = {
             "opf": "http://www.idpf.org/2007/opf",
@@ -285,10 +281,8 @@ def epub_to_chapters(epub_path: str):
             href = manifest.get(rid)
             if not href:
                 continue
-
             internal_path = f"{opf_dir}/{href}" if opf_dir else href
             internal_path = internal_path.replace("//", "/")
-
             try:
                 raw = z.read(internal_path).decode("utf-8", errors="ignore")
             except KeyError:
@@ -316,32 +310,24 @@ def chunk_text(text: str, max_len: int = 900):
 
 
 # ---------------------------
-# Android TTS via PyJNIus (inicialización BAJO DEMANDA)
+# Android TTS via PyJNIus (bajo demanda)
 # ---------------------------
 class AndroidTTS:
     def __init__(self):
         self.tts = None
         self.ready = False
         self.rate = 1.0
-
         try:
             from jnius import autoclass
-
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
             Locale = autoclass("java.util.Locale")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
-
             activity = PythonActivity.mActivity
-
-            # ⚠️ En algunos dispositivos: listener / init puede causar SIGSEGV.
-            # Creamos sin listener y NO tocamos getVoices.
             self.tts = TextToSpeech(activity, None)
-
             try:
                 self.tts.setLanguage(Locale("es", "ES"))
             except Exception:
                 pass
-
             self.ready = True
         except Exception:
             self.tts = None
@@ -361,7 +347,6 @@ class AndroidTTS:
         try:
             from jnius import autoclass
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
-            # utteranceId NO nulo (mejor para estabilidad)
             self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, None, "utt1")
             return True
         except Exception:
@@ -373,13 +358,6 @@ class AndroidTTS:
                 self.tts.stop()
             except Exception:
                 pass
-
-    def list_voices(self):
-        # ⚠️ getVoices rompe en algunos dispositivos → no lo usamos
-        return []
-
-    def set_voice_by_name(self, voice_name: str) -> bool:
-        return False
 
 
 # ---------------------------
@@ -419,7 +397,6 @@ class AudioLibroApp(App):
         self.sm.add_widget(self.setup)
         self.sm.add_widget(self.player)
 
-        # ✅ IMPORTANTE: NO inicializar TTS aquí (evita SIGSEGV a los 3–5s en algunos móviles)
         self.tts = None
 
         self.chapters = []
@@ -430,10 +407,9 @@ class AudioLibroApp(App):
 
         self._load_settings()
         self._refresh_can_start()
-
         return self.sm
 
-    # ---------- TTS init under demand ----------
+    # ---------- helpers ----------
     def _ensure_tts(self) -> bool:
         if self.tts is None:
             self.tts = AndroidTTS()
@@ -441,7 +417,6 @@ class AudioLibroApp(App):
                 self.tts.set_rate(self.rate)
         return bool(self.tts and self.tts.ready)
 
-    # ---------- persistence ----------
     def _settings_file(self):
         return Path(self.user_data_dir) / "settings.json"
 
@@ -485,9 +460,7 @@ class AudioLibroApp(App):
         except Exception:
             return None
 
-    # ---------- setup ----------
     def set_voice(self, voice_name: str):
-        # En esta versión no cambiamos voces por nombre para evitar llamadas peligrosas (getVoices/setVoice).
         if not voice_name:
             return
         self.voice_selected = voice_name
@@ -499,24 +472,152 @@ class AudioLibroApp(App):
             self.tts.set_rate(self.rate)
         self._save_settings()
 
-    def pick_epub(self):
-        filechooser.open_file(
-            filters=[("EPUB files", "*.epub"), ("All files", "*.*")],
-            on_selection=self._on_file_selected,
-        )
-
-    def _on_file_selected(self, selection):
-        if not selection:
-            self.setup.status_text = "Selección cancelada."
-            return
-        path = selection[0]
+    def _set_epub_selected(self, path: str):
         self.selected_epub_path = path
         self.selected_epub_name = Path(path).name
-        self.setup.status_text = "EPUB seleccionado. Pulsa Empezar."
+        self.setup.status_text = f"EPUB seleccionado: {self.selected_epub_name}"
         self._refresh_can_start()
 
     def _refresh_can_start(self):
         self.can_start = bool(self.selected_epub_path)
+
+    # ---------- EPUB picker (Plyer + fallback nativo) ----------
+    def pick_epub(self):
+        self.setup.status_text = "Abriendo selector de archivos..."
+
+        # 1) Primer intento: Plyer
+        if filechooser is not None:
+            try:
+                filechooser.open_file(
+                    filters=[("EPUB files", "*.epub"), ("All files", "*.*")],
+                    on_selection=self._on_file_selected,
+                )
+                # Si plyer no llama callback en X segundos → fallback
+                Clock.schedule_once(self._fallback_if_not_selected, 1.2)
+                return
+            except Exception:
+                pass
+
+        # 2) Si plyer no existe o falla → fallback directo
+        self._open_document_fallback()
+
+    def _fallback_if_not_selected(self, *_):
+        # Si en ~1.2s sigue vacío, es que el callback no llegó → abrir fallback
+        # (si el usuario aún está en el selector, esto no molesta: el intent nativo se abre al volver)
+        if not self.selected_epub_path:
+            self._open_document_fallback()
+
+    def _on_file_selected(self, selection):
+        # Plyer
+        if not selection:
+            self.setup.status_text = "Selección cancelada."
+            return
+
+        path = selection[0]
+        # En algunos Android devuelve content://... igual; lo gestionamos
+        if str(path).startswith("content://"):
+            self._import_content_uri_to_local(path)
+        else:
+            self._set_epub_selected(path)
+
+    def _open_document_fallback(self):
+        # Fallback nativo con Intent.ACTION_OPEN_DOCUMENT
+        try:
+            from jnius import autoclass, cast
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            Intent = autoclass("android.content.Intent")
+            Uri = autoclass("android.net.Uri")
+
+            activity = PythonActivity.mActivity
+
+            intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.setType("*/*")
+            # Filtramos a epub si el gestor lo soporta
+            # (algunos solo respetan MIME types conocidos)
+            try:
+                intent.putExtra(Intent.EXTRA_MIME_TYPES, ["application/epub+zip", "application/octet-stream"])
+            except Exception:
+                pass
+
+            # Guardamos un callback temporal en la app
+            # Kivy/pyjnius: usamos on_activity_result hook
+            self._pending_pick = True
+
+            REQUEST_CODE = 43210
+            self._DOC_REQUEST_CODE = REQUEST_CODE
+
+            activity.startActivityForResult(intent, REQUEST_CODE)
+            self.setup.status_text = "Selecciona un EPUB (fallback nativo)..."
+        except Exception as e:
+            self.setup.status_text = f"No puedo abrir selector (fallback): {e}"
+
+    def on_start(self):
+        # Hook para Activity result
+        try:
+            from android import activity
+            activity.bind(on_activity_result=self._on_activity_result)
+        except Exception:
+            pass
+
+    def _on_activity_result(self, requestCode, resultCode, intent):
+        if getattr(self, "_DOC_REQUEST_CODE", None) is None:
+            return
+        if requestCode != self._DOC_REQUEST_CODE:
+            return
+
+        # RESULT_OK = -1
+        if resultCode != -1 or intent is None:
+            self.setup.status_text = "Selección cancelada."
+            return
+
+        try:
+            uri = intent.getData()
+            if uri is None:
+                self.setup.status_text = "No llegó URI del archivo."
+                return
+            uri_str = str(uri.toString())
+            self._import_content_uri_to_local(uri_str)
+        except Exception as e:
+            self.setup.status_text = f"Error leyendo resultado: {e}"
+
+    def _import_content_uri_to_local(self, uri_str: str):
+        # Copia content://... a un fichero local dentro de user_data_dir
+        try:
+            from jnius import autoclass
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            activity = PythonActivity.mActivity
+            cr = activity.getContentResolver()
+
+            Uri = autoclass("android.net.Uri")
+            uri = Uri.parse(uri_str)
+
+            ins = cr.openInputStream(uri)
+            if ins is None:
+                self.setup.status_text = "No puedo abrir el archivo seleccionado."
+                return
+
+            # Nombre destino
+            dest_dir = Path(self.user_data_dir)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_path = dest_dir / f"selected_{int(time.time())}.epub"
+
+            # Copiar stream → fichero
+            with open(dest_path, "wb") as out:
+                buf = bytearray(1024 * 64)
+                while True:
+                    n = ins.read(buf)
+                    if n is None or n <= 0:
+                        break
+                    out.write(bytes(buf[:n]))
+            try:
+                ins.close()
+            except Exception:
+                pass
+
+            self._set_epub_selected(str(dest_path))
+        except Exception as e:
+            self.setup.status_text = f"Error importando EPUB: {e}"
 
     # ---------- player ----------
     def start_player(self):
@@ -573,13 +674,11 @@ class AudioLibroApp(App):
             self.player_status = "Sin EPUB."
             return
 
-        # ✅ Inicializa TTS justo antes de hablar
         if not self._ensure_tts():
-            self.player_status = "TTS no disponible. Instala Google TTS y Español (España)."
+            self.player_status = "TTS no disponible. Instala Google TTS y Español."
             self.playing = False
             return
 
-        # Aplica velocidad actual
         self.tts.set_rate(self.rate)
 
         if not self.chunks:
@@ -634,24 +733,6 @@ class AudioLibroApp(App):
         self.preview_text = self._current_text()[:2000]
         self._save_progress()
         self.player_status = f"Cap {self.chapter_idx+1}/{len(self.chapters)}"
-
-    # (Este callback queda por si luego implementas utteranceId + listener, pero ahora no lo usamos)
-    def _on_utterance_done(self, utterance_id: str):
-        if not self.playing:
-            return
-        if utterance_id.startswith("chunk_"):
-            try:
-                idx = int(utterance_id.split("_", 1)[1])
-            except Exception:
-                idx = self.chunk_idx
-            self.chunk_idx = idx + 1
-
-        if self.chunk_idx < len(self.chunks):
-            Clock.schedule_once(lambda *_: self._speak_current_chunk(), 0)
-        else:
-            self.playing = False
-            self._save_progress()
-            self.player_status = "✅ Capítulo terminado (pulsa Siguiente o Play)"
 
 
 if __name__ == "__main__":
