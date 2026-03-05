@@ -3,18 +3,22 @@ import traceback
 
 def _install_crash_logger():
     def excepthook(exc_type, exc, tb):
-        try:
-            txt = "".join(traceback.format_exception(exc_type, exc, tb))
-            # Intenta guardar donde Kivy suele tener acceso
-            try:
-                from android.storage import app_storage_path  # disponible en Android
-                p = app_storage_path()
-                path = p + "/crash.log"
-            except Exception:
-                path = "crash.log"
+        txt = "".join(traceback.format_exception(exc_type, exc, tb))
 
+        # 1) Intenta escribir en app_storage (lo más fiable)
+        try:
+            from android.storage import app_storage_path
+            base = app_storage_path()
+            path = base + "/crash.log"
             with open(path, "w", encoding="utf-8") as f:
                 f.write(txt)
+        except Exception:
+            pass
+
+        # 2) También a logcat (para verlo con adb logcat)
+        try:
+            import android
+            android.logger.error(txt)
         except Exception:
             pass
 
@@ -310,61 +314,28 @@ def chunk_text(text: str, max_len: int = 900):
 # Android TTS via PyJNIus
 # ---------------------------
 class AndroidTTS:
-    def __init__(self, on_done=None):
+    def __init__(self):
         self.tts = None
         self.ready = False
         self.rate = 1.0
-        self.on_done = on_done
 
         try:
-            from jnius import autoclass, PythonJavaClass, java_method
+            from jnius import autoclass, JavaException
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
             Locale = autoclass("java.util.Locale")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
 
-            class OnInitListener(PythonJavaClass):
-                __javainterfaces__ = ["android/speech/tts/TextToSpeech$OnInitListener"]
-                __javacontext__ = "app"
-
-                def __init__(self, outer):
-                    super().__init__()
-                    self.outer = outer
-
-                @java_method("(I)V")
-                def onInit(self, status):
-                    if status == 0:
-                        self.outer.ready = True
-                        try:
-                            self.outer.tts.setLanguage(Locale("es", "ES"))
-                            self.outer.tts.setSpeechRate(float(self.outer.rate))
-                        except Exception:
-                            pass
-
-            class ProgListener(PythonJavaClass):
-                __javainterfaces__ = ["android/speech/tts/UtteranceProgressListener"]
-                __javacontext__ = "app"
-
-                def __init__(self, outer):
-                    super().__init__()
-                    self.outer = outer
-
-                @java_method("(Ljava/lang/String;)V")
-                def onStart(self, utteranceId):
-                    return
-
-                @java_method("(Ljava/lang/String;)V")
-                def onDone(self, utteranceId):
-                    if self.outer.on_done:
-                        self.outer.on_done(str(utteranceId))
-
-                @java_method("(Ljava/lang/String;)V")
-                def onError(self, utteranceId):
-                    if self.outer.on_done:
-                        self.outer.on_done(str(utteranceId))
-
             activity = PythonActivity.mActivity
-            self.tts = TextToSpeech(activity, OnInitListener(self))
-            self.tts.setOnUtteranceProgressListener(ProgListener(self))
+
+            # ⚠️ Sin listener para evitar el SIGSEGV en algunos dispositivos
+            self.tts = TextToSpeech(activity, None)
+
+            try:
+                self.tts.setLanguage(Locale("es", "ES"))
+            except Exception:
+                pass
+
+            self.ready = True
 
         except Exception:
             self.tts = None
@@ -378,11 +349,12 @@ class AndroidTTS:
             except Exception:
                 pass
 
-    def speak(self, text: str, utterance_id: str):
+    def speak(self, text: str):
         if not self.tts or not self.ready:
             return False
         try:
-            self.tts.speak(text, 0, None, utterance_id)  # QUEUE_FLUSH
+            # QUEUE_FLUSH = 0
+            self.tts.speak(text, 0, None, None)
             return True
         except Exception:
             return False
@@ -395,42 +367,11 @@ class AndroidTTS:
                 pass
 
     def list_voices(self):
-        if not self.tts or not self.ready:
-            return []
-        try:
-            vs = self.tts.getVoices()
-            if vs is None:
-                return []
-            it = vs.iterator()
-            out = []
-            while it.hasNext():
-                v = it.next()
-                loc = v.getLocale()
-                lang = str(loc.getLanguage()) if loc else ""
-                country = str(loc.getCountry()) if loc else ""
-                name = str(v.getName())
-                out.append({"name": name, "lang": lang, "country": country})
-            return out
-        except Exception:
-            return []
+        # En algunos dispositivos, getVoices también rompe; devolvemos lista vacía
+        return []
 
     def set_voice_by_name(self, voice_name: str) -> bool:
-        if not self.tts or not self.ready:
-            return False
-        try:
-            vs = self.tts.getVoices()
-            if vs is None:
-                return False
-            it = vs.iterator()
-            while it.hasNext():
-                v = it.next()
-                if str(v.getName()) == voice_name:
-                    self.tts.setVoice(v)
-                    return True
-        except Exception:
-            pass
         return False
-
 
 # ---------------------------
 # Screens
@@ -468,7 +409,7 @@ class AudioLibroApp(App):
         self.sm.add_widget(self.setup)
         self.sm.add_widget(self.player)
 
-        self.tts = AndroidTTS(on_done=self._on_utterance_done)
+        self.tts = AndroidTTS()
 
         self.chapters = []
         self.chapter_idx = 0
@@ -652,7 +593,7 @@ class AudioLibroApp(App):
             self.player_status = "Capítulo vacío."
             return
 
-        ok = self.tts.speak(self.chunks[self.chunk_idx], utterance_id=f"chunk_{self.chunk_idx}")
+        ok = self.tts.speak(self.chunks[self.chunk_idx])
         if not ok:
             self.player_status = "No puedo iniciar TTS (revísalo en Ajustes del móvil)."
             self.playing = False
