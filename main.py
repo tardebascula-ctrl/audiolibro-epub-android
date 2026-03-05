@@ -1,3 +1,5 @@
+# main.py (versión corregida: NO inicializa TTS al arrancar para evitar SIGSEGV en jnius/TTS)
+
 import sys
 import traceback
 
@@ -26,7 +28,6 @@ def _install_crash_logger():
 
 _install_crash_logger()
 
-import re
 import json
 import zipfile
 import xml.etree.ElementTree as ET
@@ -86,7 +87,7 @@ KV = r"""
             height: self.texture_size[1] + dp(6)
 
         Spinner:
-            text: app.voice_selected or "Cargando voces..."
+            text: app.voice_selected or "Sistema (es-ES)"
             values: app.voice_names
             disabled: not app.voices_ready
             size_hint_y: None
@@ -217,19 +218,22 @@ class _HTMLStripper(HTMLParser):
     def __init__(self):
         super().__init__()
         self.parts = []
+
     def handle_data(self, data):
         if data:
             self.parts.append(data)
+
     def get_text(self):
         return " ".join(self.parts)
+
 
 def html_to_text(html: str) -> str:
     s = _HTMLStripper()
     s.feed(html)
     text = s.get_text()
-    # normaliza espacios
     text = " ".join(text.split())
     return text
+
 
 def _find_opf_path(z: zipfile.ZipFile) -> str:
     container = z.read("META-INF/container.xml")
@@ -243,6 +247,7 @@ def _find_opf_path(z: zipfile.ZipFile) -> str:
         if fp:
             return fp
     raise RuntimeError("No encuentro content.opf en container.xml")
+
 
 def epub_to_chapters(epub_path: str):
     with zipfile.ZipFile(epub_path, "r") as z:
@@ -290,11 +295,11 @@ def epub_to_chapters(epub_path: str):
                 continue
 
             txt = html_to_text(raw)
-            # filtra portada/índice cortos
             if len(txt) > 400:
                 chapters.append(txt)
 
         return title, chapters
+
 
 def chunk_text(text: str, max_len: int = 900):
     words = text.replace("\n", " ").split()
@@ -311,7 +316,7 @@ def chunk_text(text: str, max_len: int = 900):
 
 
 # ---------------------------
-# Android TTS via PyJNIus
+# Android TTS via PyJNIus (inicialización BAJO DEMANDA)
 # ---------------------------
 class AndroidTTS:
     def __init__(self):
@@ -320,14 +325,16 @@ class AndroidTTS:
         self.rate = 1.0
 
         try:
-            from jnius import autoclass, JavaException
+            from jnius import autoclass
+
             TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
             Locale = autoclass("java.util.Locale")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
 
             activity = PythonActivity.mActivity
 
-            # ⚠️ Sin listener para evitar el SIGSEGV en algunos dispositivos
+            # ⚠️ En algunos dispositivos: listener / init puede causar SIGSEGV.
+            # Creamos sin listener y NO tocamos getVoices.
             self.tts = TextToSpeech(activity, None)
 
             try:
@@ -336,7 +343,6 @@ class AndroidTTS:
                 pass
 
             self.ready = True
-
         except Exception:
             self.tts = None
             self.ready = False
@@ -349,12 +355,14 @@ class AndroidTTS:
             except Exception:
                 pass
 
-    def speak(self, text: str):
+    def speak(self, text: str) -> bool:
         if not self.tts or not self.ready:
             return False
         try:
-            # QUEUE_FLUSH = 0
-            self.tts.speak(text, 0, None, None)
+            from jnius import autoclass
+            TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
+            # utteranceId NO nulo (mejor para estabilidad)
+            self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, None, "utt1")
             return True
         except Exception:
             return False
@@ -367,17 +375,19 @@ class AndroidTTS:
                 pass
 
     def list_voices(self):
-        # En algunos dispositivos, getVoices también rompe; devolvemos lista vacía
+        # ⚠️ getVoices rompe en algunos dispositivos → no lo usamos
         return []
 
     def set_voice_by_name(self, voice_name: str) -> bool:
         return False
 
+
 # ---------------------------
 # Screens
 # ---------------------------
 class SetupScreen(Screen):
-    status_text = StringProperty("Cargando voces...")
+    status_text = StringProperty("Listo. Elige EPUB y pulsa Empezar.")
+
 
 class PlayerScreen(Screen):
     pass
@@ -387,9 +397,9 @@ class PlayerScreen(Screen):
 # App
 # ---------------------------
 class AudioLibroApp(App):
-    voice_names = ListProperty([])
-    voices_ready = BooleanProperty(False)
-    voice_selected = StringProperty("")
+    voice_names = ListProperty(["Sistema (es-ES)"])
+    voices_ready = BooleanProperty(True)
+    voice_selected = StringProperty("Sistema (es-ES)")
     rate = NumericProperty(1.0)
 
     selected_epub_path = StringProperty("")
@@ -409,7 +419,8 @@ class AudioLibroApp(App):
         self.sm.add_widget(self.setup)
         self.sm.add_widget(self.player)
 
-        self.tts = AndroidTTS()
+        # ✅ IMPORTANTE: NO inicializar TTS aquí (evita SIGSEGV a los 3–5s en algunos móviles)
+        self.tts = None
 
         self.chapters = []
         self.chapter_idx = 0
@@ -418,11 +429,17 @@ class AudioLibroApp(App):
         self.playing = False
 
         self._load_settings()
-
-        Clock.schedule_interval(self._try_load_voices, 0.5)
         self._refresh_can_start()
 
         return self.sm
+
+    # ---------- TTS init under demand ----------
+    def _ensure_tts(self) -> bool:
+        if self.tts is None:
+            self.tts = AndroidTTS()
+            if self.tts and self.tts.ready:
+                self.tts.set_rate(self.rate)
+        return bool(self.tts and self.tts.ready)
 
     # ---------- persistence ----------
     def _settings_file(self):
@@ -437,7 +454,7 @@ class AudioLibroApp(App):
             if p.exists():
                 data = json.loads(p.read_text(encoding="utf-8"))
                 self.rate = float(data.get("rate", 1.0))
-                self.voice_selected = str(data.get("voice", "")) or ""
+                self.voice_selected = str(data.get("voice", "Sistema (es-ES)")) or "Sistema (es-ES)"
         except Exception:
             pass
 
@@ -469,44 +486,17 @@ class AudioLibroApp(App):
             return None
 
     # ---------- setup ----------
-    def _try_load_voices(self, *_):
-        if self.voices_ready:
-            return False
-
-        if not self.tts.ready:
-            self.setup.status_text = "Esperando a TTS..."
-            return True
-
-        self.tts.set_rate(self.rate)
-
-        voices = self.tts.list_voices()
-        es = [v for v in voices if v["lang"] == "es"]
-        ordered = es if es else voices
-
-        self.voice_names = [v["name"] for v in ordered]
-        self.voices_ready = True
-
-        if not self.voice_selected and self.voice_names:
-            self.voice_selected = self.voice_names[0]
-
-        if self.voice_selected:
-            self.tts.set_voice_by_name(self.voice_selected)
-
-        self.setup.status_text = "Listo: elige EPUB, voz y velocidad."
-        self._save_settings()
-        self._refresh_can_start()
-        return False
-
     def set_voice(self, voice_name: str):
-        if not voice_name or not self.tts.ready:
+        # En esta versión no cambiamos voces por nombre para evitar llamadas peligrosas (getVoices/setVoice).
+        if not voice_name:
             return
-        if self.tts.set_voice_by_name(voice_name):
-            self.voice_selected = voice_name
-            self._save_settings()
+        self.voice_selected = voice_name
+        self._save_settings()
 
     def set_rate(self, r: float):
         self.rate = float(r)
-        self.tts.set_rate(self.rate)
+        if self.tts and self.tts.ready:
+            self.tts.set_rate(self.rate)
         self._save_settings()
 
     def pick_epub(self):
@@ -526,12 +516,13 @@ class AudioLibroApp(App):
         self._refresh_can_start()
 
     def _refresh_can_start(self):
-        self.can_start = bool(self.voices_ready and self.selected_epub_path)
+        self.can_start = bool(self.selected_epub_path)
 
     # ---------- player ----------
     def start_player(self):
         self.player_status = "Leyendo EPUB..."
-        self.tts.stop()
+        if self.tts and self.tts.ready:
+            self.tts.stop()
         self.playing = False
 
         try:
@@ -581,11 +572,15 @@ class AudioLibroApp(App):
         if not self.chapters:
             self.player_status = "Sin EPUB."
             return
-        if not self.tts.ready:
-            self.player_status = "TTS no listo (instala voz en español)."
+
+        # ✅ Inicializa TTS justo antes de hablar
+        if not self._ensure_tts():
+            self.player_status = "TTS no disponible. Instala Google TTS y Español (España)."
+            self.playing = False
             return
-        if self.voice_selected:
-            self.tts.set_voice_by_name(self.voice_selected)
+
+        # Aplica velocidad actual
+        self.tts.set_rate(self.rate)
 
         if not self.chunks:
             self._load_current_chunks()
@@ -595,7 +590,7 @@ class AudioLibroApp(App):
 
         ok = self.tts.speak(self.chunks[self.chunk_idx])
         if not ok:
-            self.player_status = "No puedo iniciar TTS (revísalo en Ajustes del móvil)."
+            self.player_status = "No puedo iniciar TTS (Ajustes → Texto a voz)."
             self.playing = False
             return
 
@@ -607,7 +602,8 @@ class AudioLibroApp(App):
         self._speak_current_chunk()
 
     def pause(self):
-        self.tts.stop()
+        if self.tts and self.tts.ready:
+            self.tts.stop()
         self.playing = False
         self._save_progress()
         self.player_status = "⏸ Pausado"
@@ -618,7 +614,8 @@ class AudioLibroApp(App):
     def next_chapter(self):
         if not self.chapters:
             return
-        self.tts.stop()
+        if self.tts and self.tts.ready:
+            self.tts.stop()
         self.chapter_idx = min(self.chapter_idx + 1, len(self.chapters) - 1)
         self.chunk_idx = 0
         self._load_current_chunks()
@@ -629,7 +626,8 @@ class AudioLibroApp(App):
     def prev_chapter(self):
         if not self.chapters:
             return
-        self.tts.stop()
+        if self.tts and self.tts.ready:
+            self.tts.stop()
         self.chapter_idx = max(self.chapter_idx - 1, 0)
         self.chunk_idx = 0
         self._load_current_chunks()
@@ -637,6 +635,7 @@ class AudioLibroApp(App):
         self._save_progress()
         self.player_status = f"Cap {self.chapter_idx+1}/{len(self.chapters)}"
 
+    # (Este callback queda por si luego implementas utteranceId + listener, pero ahora no lo usamos)
     def _on_utterance_done(self, utterance_id: str):
         if not self.playing:
             return
