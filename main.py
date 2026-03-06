@@ -421,14 +421,6 @@ class AudioLibroApp(App):
                 0
             )
 
-    def _ui_show_extracted_text(self, text, epub_path):
-        try:
-            self.text_box.text = text
-            self.set_status(f"Texto extraído desde:\n{epub_path}")
-        except Exception:
-            from kivy.logger import Logger
-            Logger.exception("APP: Error mostrando texto extraído")
-
     def _ui_texto_extraido(self, texto):
         try:
             self.set_status("Texto extraído correctamente.")
@@ -439,10 +431,13 @@ class AudioLibroApp(App):
 
     def _ui_error_texto(self, error_text):
         try:
+            self.is_extracting = False
             self.set_status(f"Error extrayendo texto: {error_text}")
             self.text_box.text = f"Error extrayendo texto del EPUB:\n\n{error_text}"
         except Exception:
+            from kivy.logger import Logger
             Logger.exception("APP: Error mostrando fallo de extracción")
+            self.is_extracting = False
 
     def mostrar_texto(self):
         from kivy.clock import Clock
@@ -479,6 +474,39 @@ class AudioLibroApp(App):
             lambda dt, t=text, p=epub_path: self._ui_show_extracted_text(t, p),
             0
         )
+
+    def _ui_show_extracted_text(self, text, epub_path):
+        try:
+            self.is_extracting = False
+            self.text_box.text = text
+            self.set_status(f"Texto extraído desde:\n{epub_path}")
+        except Exception:
+            from kivy.logger import Logger
+            Logger.exception("APP: Error mostrando texto extraído")
+            self.is_extracting = False
+
+    def on_show_text_pressed(self):
+        import os
+        import threading
+
+        epub_path = getattr(self, "local_epub_path", None)
+
+        if not epub_path:
+            self.set_status("Primero carga un EPUB.")
+            return
+
+        if not os.path.exists(epub_path):
+            self.set_status("El archivo EPUB ya no existe.")
+            return
+
+        self.set_status("Extrayendo texto del EPUB...")
+
+        threading.Thread(
+            target=self._do_extract_text,
+            args=(epub_path,),
+            daemon=True
+        ).start()   
+        
     def _leer_epub_texto(self, path):
         from ebooklib import epub
         from bs4 import BeautifulSoup
