@@ -270,47 +270,55 @@ class AudioLibroApp(App):
             return
 
         try:
-            from jnius import autoclass, cast
+            from jnius import autoclass
 
             Activity = autoclass("android.app.Activity")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            IntentCls = autoclass("android.content.Intent")
             current_activity = PythonActivity.mActivity
 
             if result_code != Activity.RESULT_OK or intent is None:
-                self.set_status("Selección cancelada.")
+                Clock.schedule_once(
+                    lambda dt: self._ui_set_status_only("Selección cancelada."),
+                    0
+                )
                 return
 
             uri = intent.getData()
             if uri is None:
-                self.set_status("No se recibió ningún archivo.")
+                Clock.schedule_once(
+                    lambda dt: self._ui_set_status_only("No se recibió ningún archivo."),
+                    0
+                )
                 return
 
             try:
                 current_activity.getContentResolver().takePersistableUriPermission(
                     uri,
-                    intent.getFlags() & (
-                        autoclass("android.content.Intent").FLAG_GRANT_READ_URI_PERMISSION
-                    )
+                    intent.getFlags() & IntentCls.FLAG_GRANT_READ_URI_PERMISSION
                 )
             except Exception:
-                # No todos los proveedores lo permiten; no es crítico
                 pass
 
             uri_str = str(uri)
             Logger.info(f"DEBUG native uri = {uri_str}")
 
             local_path = self._copy_uri_to_internal_file(uri)
-            self.local_epub_path = local_path
+            # self.local_epub_path = local_path
 
-            self.set_status(f"EPUB cargado:\n{local_path}")
-            self.text_box.text = (
-                f"EPUB cargado correctamente.\n\nRuta local:\n{local_path}\n\n"
-                "Pulsa 'Mostrar texto' para extraer una vista previa."
+            Logger.info(f"APP: EPUB cargado: {local_path}")
+
+            Clock.schedule_once(
+                lambda dt, p=local_path: self._ui_epub_loaded(p),
+                0
             )
 
         except Exception as e:
             Logger.exception("Error procesando resultado del selector")
-            self.set_status(f"Error al recibir EPUB: {e}")
+            Clock.schedule_once(
+                lambda dt, msg=str(e): self._ui_set_status_only(f"Error al recibir EPUB: {msg}"),
+                0
+            )
 
     def _copy_uri_to_internal_file(self, uri):
         from jnius import autoclass
@@ -350,6 +358,23 @@ class AudioLibroApp(App):
             except Exception:
                 pass
 
+    def _ui_set_status_only(self, message):
+        try:
+            self.set_status(message)
+        except Exception:
+            Logger.exception("APP: Error actualizando estado en UI")
+
+    def _ui_epub_loaded(self, local_path):
+        try:
+            self.local_epub_path = local_path
+            self.set_status(f"EPUB cargado:\n{local_path}")
+            self.text_box.text = (
+                f"EPUB cargado correctamente.\n\nRuta local:\n{local_path}\n\n"
+                "Pulsa 'Mostrar texto' para extraer una vista previa."
+            )
+        except Exception:
+            Logger.exception("APP: Error actualizando UI tras cargar EPUB")
+    
     # =========================
     # TEXTO
     # =========================
