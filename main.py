@@ -312,45 +312,51 @@ class AudioLibroApp(App):
             Logger.exception("Error procesando resultado del selector")
             self.set_status(f"Error al recibir EPUB: {e}")
 
-    def _copy_uri_to_internal_file(self, uri) -> str:
-        from jnius import autoclass, cast
+    def _copy_uri_to_internal_file(self, uri):
+        from jnius import autoclass
+        import os
 
         PythonActivity = autoclass("org.kivy.android.PythonActivity")
         current_activity = PythonActivity.mActivity
         resolver = current_activity.getContentResolver()
 
-        input_stream = resolver.openInputStream(uri)
-        if input_stream is None:
-            raise RuntimeError("No se pudo abrir el InputStream del archivo.")
-
-        dest_path = self.app_storage_epub_path()
+        input_stream = None
+        output_stream = None
 
         try:
+            input_stream = resolver.openInputStream(uri)
+
+            if input_stream is None:
+                raise Exception("No se pudo abrir InputStream del EPUB")
+
+            base_dir = current_activity.getFilesDir().getAbsolutePath()
+            dest_path = os.path.join(base_dir, "libro.epub")
+
             FileOutputStream = autoclass("java.io.FileOutputStream")
-            out_stream = FileOutputStream(dest_path)
+            output_stream = FileOutputStream(dest_path)
 
-            buffer_size = 8192
-            ByteArray = autoclass("[B")
-            buffer = ByteArray(buffer_size)
-
+            # Buffer Python normal
             while True:
-                read = input_stream.read(buffer)
-                if read == -1:
+                chunk = input_stream.read()
+                if chunk == -1:
                     break
-                out_stream.write(buffer, 0, read)
+                output_stream.write(chunk)
 
-            out_stream.flush()
-            out_stream.close()
-            input_stream.close()
+            output_stream.flush()
+            return dest_path
 
-        except Exception:
+        finally:
             try:
-                input_stream.close()
+                if input_stream is not None:
+                    input_stream.close()
             except Exception:
                 pass
-            raise
 
-        return dest_path
+            try:
+                if output_stream is not None:
+                    output_stream.close()
+            except Exception:
+                pass
 
     # =========================
     # TEXTO
