@@ -41,10 +41,13 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install "buildozer==1.5.0" "cython<3"
 
-      - name: Prepare Buildozer SDK + cmdline-tools + accept licenses
+      - name: Prepare Buildozer SDK + install cmdline-tools + accept licenses
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
+          javac -version
 
           mkdir -p "$HOME/.buildozer/android/platform/android-sdk"
 
@@ -80,20 +83,18 @@ jobs:
             "build-tools;34.0.0"
 
       - name: Build APK (Buildozer)
-        shell: bash
-        run: |
-          set -euxo pipefail
+          shell: bash
+         run: |
+           set -euxo pipefail
+           export PATH="$JAVA_HOME/bin:$PATH"
+           java -version
+           javac -version
 
-          export JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(which javac)")")")"
-          export PATH="$JAVA_HOME/bin:$PATH"
-          java -version
-          javac -version
+           export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
+           export ANDROID_HOME="$ANDROID_SDK_ROOT"
+           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
 
-          export ANDROID_SDK_ROOT="$HOME/.buildozer/android/platform/android-sdk"
-          export ANDROID_HOME="$ANDROID_SDK_ROOT"
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
-
-          buildozer -v android debug
+           buildozer -v android debug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
