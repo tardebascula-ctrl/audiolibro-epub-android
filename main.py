@@ -626,6 +626,13 @@ class AudioLibroApp(App):
             stream.close()
 
             print("DEBUG local epub =", str(dest))
+            print("DEBUG 1 local_path =", local_path)
+            self.book_path = local_path
+            print("DEBUG 2 book_path asignado")
+            print("DEBUG 3 existe =", os.path.exists(local_path))
+            print("DEBUG 4 tamaño =", os.path.getsize(local_path))
+            self.cargar_epub(local_path)
+            print("DEBUG 5 cargar_epub terminado")
             return str(dest)
 
         except Exception as e:
