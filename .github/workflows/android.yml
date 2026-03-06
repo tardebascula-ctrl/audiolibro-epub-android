@@ -64,6 +64,11 @@ jobs:
             mv "$SDKROOT/cmdline-tools/latest/cmdline-tools/"* "$SDKROOT/cmdline-tools/latest/"
             rmdir "$SDKROOT/cmdline-tools/latest/cmdline-tools"
           fi
+          
+          # Compatibilidad con Buildozer: espera sdkmanager en tools/bin
+          mkdir -p "$SDKROOT/tools/bin"
+          ln -sf "$SDKROOT/cmdline-tools/latest/bin/sdkmanager" "$SDKROOT/tools/bin/sdkmanager"
+          ln -sf "$SDKROOT/cmdline-tools/latest/bin/avdmanager" "$SDKROOT/tools/bin/avdmanager"
 
           SDKMANAGER="$SDKROOT/cmdline-tools/latest/bin/sdkmanager"
           test -f "$SDKMANAGER"
