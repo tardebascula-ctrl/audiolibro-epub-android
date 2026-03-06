@@ -436,6 +436,7 @@ class PlayerScreen(Screen):
 # App
 # ---------------------------
 class AudioLibroApp(App):
+    FILE_REQ_CODE = 4242
     voice_names = ListProperty(["Sistema (es-ES)"])
     voices_ready = BooleanProperty(True)
     voice_selected = StringProperty("Sistema (es-ES)")
