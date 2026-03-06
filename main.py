@@ -30,6 +30,8 @@ from pathlib import Path
 import os
 import shutil
 import time
+import shutil
+from urllib.parse import urlparse
 
 from kivy.app import App
 from kivy.lang import Builder
@@ -539,19 +541,96 @@ class AudioLibroApp(App):
             self.setup.status_text = "Ruta EPUB vacía."
             return
 
+        # Si Android devuelve content://, lo copiamos a un archivo local
+        if self._is_content_uri(path):
+            local_path = self._copy_content_uri_to_local(path)
+            if not local_path:
+                self.setup.status_text = "No pude importar el EPUB desde Android."
+                return
+            path = local_path
+
         self.selected_epub_path = path
-        self.selected_epub_name = Path(path).name if "/" in path or "\\" in path else path
+        self.selected_epub_name = Path(path).name
         self.setup.status_text = "EPUB seleccionado. Pulsa Empezar."
         self._refresh_can_start()
 
     def _refresh_can_start(self):
         self.can_start = bool(self.selected_epub_path)
 
+    def _is_content_uri(self, value: str) -> bool:
+        try:
+            return isinstance(value, str) and value.startswith("content://")
+        except Exception:
+            return False
+
+    def _copy_content_uri_to_local(self, uri: str) -> str | None:
+        try:
+            from jnius import autoclass, cast
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            activity = PythonActivity.mActivity
+            resolver = activity.getContentResolver()
+
+            Uri = autoclass("android.net.Uri")
+            parsed_uri = Uri.parse(uri)
+
+            stream = resolver.openInputStream(parsed_uri)
+            if stream is None:
+                return None
+
+            # nombre destino
+            name = "selected_book.epub"
+            try:
+                OpenableColumns = autoclass("android.provider.OpenableColumns")
+                cursor = resolver.query(parsed_uri, None, None, None, None)
+                if cursor:
+                    idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if idx >= 0 and cursor.moveToFirst():
+                        display_name = cursor.getString(idx)
+                        if display_name:
+                            name = display_name
+                    cursor.close()
+            except Exception:
+                pass
+
+            safe_name = name.replace("/", "_").replace("\\", "_").strip()
+            if not safe_name.lower().endswith(".epub"):
+                safe_name += ".epub"
+
+            dest = Path(self.user_data_dir) / safe_name
+
+            FileOutputStream = autoclass("java.io.FileOutputStream")
+            fos = FileOutputStream(str(dest))
+
+            buffer_size = 8192
+            byte_array = autoclass("java.lang.reflect.Array")
+            Byte = autoclass("java.lang.Byte")
+            buf = byte_array.newInstance(Byte.TYPE, buffer_size)
+
+            while True:
+                read = stream.read(buf)
+                if read == -1:
+                    break
+                fos.write(buf, 0, read)
+
+            fos.flush()
+            fos.close()
+            stream.close()
+
+            return str(dest)
+
+        except Exception as e:
+            self.setup.status_text = f"Error copiando EPUB: {e}"
+            return None
+
     # ---------- EPUB picker (Plyer + fallback nativo) ----------
     def pick_epub(self):
-        filechooser.open_file(
-            on_selection=self._on_file_selected,
-        )
+        try:
+            filechooser.open_file(
+                on_selection=self._on_file_selected,
+            )
+        except Exception as e:
+            self.setup.status_text = f"Error abriendo selector: {e}"
 
     def _fallback_if_not_selected(self, *_):
         # Si en ~1.2s sigue vacío, es que el callback no llegó → abrir fallback
@@ -560,22 +639,28 @@ class AudioLibroApp(App):
             self._open_document_fallback()
 
     def _on_file_selected(self, selection):
+        try:
+            print("DEBUG selection =", selection)
+        except Exception:
+            pass
+
         if not selection:
             self.setup.status_text = "Selección cancelada."
             return
 
-        path = selection[0]
+        candidate = selection[0] if isinstance(selection, (list, tuple)) else selection
 
-        if path is None:
+        if candidate is None:
             self.setup.status_text = "No se recibió ninguna ruta válida."
             return
 
-        path = str(path).strip()
-        if not path:
+        candidate = str(candidate).strip()
+        if not candidate:
             self.setup.status_text = "Ruta vacía."
             return
 
-        self._set_epub_selected(path)
+        self._set_epub_selected(candidate)
+        
     def _open_document_fallback(self):
         # Fallback nativo con Intent.ACTION_OPEN_DOCUMENT
         try:
