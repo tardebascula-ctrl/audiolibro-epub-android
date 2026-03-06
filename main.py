@@ -334,32 +334,28 @@ class AndroidTTS:
 
             # Idioma con fallbacks (algunos motores fallan con es-ES pero aceptan es)
             self.last_lang_status = None
-        try:
-            candidates = [
-                Locale("es", "ES"),
-                Locale("es", ""),
-            ]
-            for loc in candidates:
-                try:
-                    st = int(self.tts.setLanguage(loc))
-                    self.last_lang_status = st
-                    # No asumimos nada: solo guardamos el último estado
-                    # y dejamos que speak() decida si funciona.
-                    if st >= 0:
-                        break
-                except Exception:
-                    continue
-        except Exception:
-            self.last_lang_status = None
+            try:
+                candidates = [
+                    Locale("es", "ES"),
+                    Locale("es", ""),
+                ]
+                for loc in candidates:
+                    try:
+                        st = int(self.tts.setLanguage(loc))
+                        self.last_lang_status = st
+                        if st >= 0:
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                self.last_lang_status = None
 
-            # Set rate
+            # velocidad inicial
             try:
                 self.tts.setSpeechRate(float(self.rate))
             except Exception:
                 pass
 
-            # Ojo: aunque esté “creado”, puede tardar en estar listo.
-            # Marcamos “ready” pero hablaremos con reintentos.
             self.ready = True
 
         except Exception:
