@@ -530,9 +530,18 @@ class AudioLibroApp(App):
         self._save_settings()
 
     def _set_epub_selected(self, path: str):
+        if path is None:
+            self.setup.status_text = "Ruta EPUB no válida."
+            return
+
+        path = str(path).strip()
+        if not path:
+            self.setup.status_text = "Ruta EPUB vacía."
+            return
+
         self.selected_epub_path = path
-        self.selected_epub_name = Path(path).name
-        self.setup.status_text = f"EPUB seleccionado: {self.selected_epub_name}"
+        self.selected_epub_name = Path(path).name if "/" in path or "\\" in path else path
+        self.setup.status_text = "EPUB seleccionado. Pulsa Empezar."
         self._refresh_can_start()
 
     def _refresh_can_start(self):
@@ -540,23 +549,9 @@ class AudioLibroApp(App):
 
     # ---------- EPUB picker (Plyer + fallback nativo) ----------
     def pick_epub(self):
-        self.setup.status_text = "Abriendo selector de archivos..."
-
-        # 1) Primer intento: Plyer
-        if filechooser is not None:
-            try:
-                filechooser.open_file(
-                    filters=[("EPUB files", "*.epub"), ("All files", "*.*")],
-                    on_selection=self._on_file_selected,
-                )
-                # Si plyer no llama callback en X segundos → fallback
-                Clock.schedule_once(self._fallback_if_not_selected, 1.2)
-                return
-            except Exception:
-                pass
-
-        # 2) Si plyer no existe o falla → fallback directo
-        self._open_document_fallback()
+        filechooser.open_file(
+            on_selection=self._on_file_selected,
+        )
 
     def _fallback_if_not_selected(self, *_):
         # Si en ~1.2s sigue vacío, es que el callback no llegó → abrir fallback
@@ -565,18 +560,22 @@ class AudioLibroApp(App):
             self._open_document_fallback()
 
     def _on_file_selected(self, selection):
-        # Plyer
         if not selection:
             self.setup.status_text = "Selección cancelada."
             return
 
         path = selection[0]
-        # En algunos Android devuelve content://... igual; lo gestionamos
-        if str(path).startswith("content://"):
-            self._import_content_uri_to_local(path)
-        else:
-            self._set_epub_selected(path)
 
+        if path is None:
+            self.setup.status_text = "No se recibió ninguna ruta válida."
+            return
+
+        path = str(path).strip()
+        if not path:
+            self.setup.status_text = "Ruta vacía."
+            return
+
+        self._set_epub_selected(path)
     def _open_document_fallback(self):
         # Fallback nativo con Intent.ACTION_OPEN_DOCUMENT
         try:
